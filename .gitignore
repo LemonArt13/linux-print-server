@@ -1,0 +1,13 @@
+node_modules/
+dist/
+server/dist/
+.env
+.env.*
+!.env.example
+.idea/
+.DS_Store
+*.log
+server/uploads/*
+!server/uploads/.gitkeep
+server/data/print-history.txt
+server/data/settings.json
