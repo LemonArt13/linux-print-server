@@ -31,6 +31,8 @@ Production frontend та API працюють з одного origin: http://127
 
 ## Розгортання Ubuntu
 
+Повна інструкція налаштування, запуску й діагностики: [UBUNTU_SERVER_GUIDE.md](UBUNTU_SERVER_GUIDE.md).
+
 1. Додати публічний SSH-ключ Mac до `~/.ssh/authorized_keys` користувача Ubuntu.
 2. Переглянути `deploy/bootstrap-ubuntu.sh`, передати його разом із `deploy/printflow.service` на Ubuntu. Виконати `sudo bash /home/artem/bootstrap-ubuntu.sh artem`. Скрипт призначений для наявної Ubuntu 26.10, де apt надає Node.js 24. Він не перевстановлює ОС.
 3. Створити на Ubuntu окремий SSH deploy key, додати до існуючого приватного GitHub-репозиторію з вимкненим Allow write access. Перевірити ключ хоста GitHub за офіційним джерелом, використати `IdentityFile` і `IdentitiesOnly yes`.

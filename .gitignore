@@ -11,3 +11,9 @@ server/uploads/*
 !server/uploads/.gitkeep
 server/data/print-history.txt
 server/data/settings.json
+server/data/*
+!server/data/.gitkeep
+*.tmp
+__pycache__/
+*.pyc
+.venv/
