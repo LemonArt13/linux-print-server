@@ -1,0 +1,28 @@
+[Unit]
+Description=PrintFlow LAN document application
+After=network.target
+
+[Service]
+Type=simple
+User=printflow
+Group=printflow
+WorkingDirectory=/opt/printflow/current/server
+Environment=NODE_ENV=production
+Environment=HOST=0.0.0.0
+Environment=PORT=4000
+Environment=DATA_DIR=/var/lib/printflow/data
+Environment=UPLOAD_DIR=/var/lib/printflow/uploads
+EnvironmentFile=/etc/printflow.env
+ExecStart=/usr/bin/node /opt/printflow/current/server/dist/index.js
+Restart=on-failure
+RestartSec=3
+TimeoutStopSec=15
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/printflow
+
+[Install]
+WantedBy=multi-user.target

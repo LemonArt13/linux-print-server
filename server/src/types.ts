@@ -1,25 +1,11 @@
-export type JobStatus = 'queued' | 'printing' | 'completed' | 'error' | 'cancelled';
-
-export interface PrintJob {
-  id: string;
-  fileName: string;
-  filePath: string;
-  status: JobStatus;
-  createdAt: string;
-  updatedAt: string;
-}
-
-export type PublicJob = Omit<PrintJob, 'filePath'>;
-
+export type JobStatus = 'uploaded' | 'stored' | 'awaiting_setup' | 'error';
 export interface HistoryRecord {
   id: string;
   fileName: string;
-  status: JobStatus;
+  status: JobStatus | 'queued' | 'printing' | 'completed' | 'cancelled';
   createdAt: string;
   finishedAt: string;
+  size?: number;
+  message?: string;
 }
-
-export interface Settings {
-  autoCleanup: boolean;
-  retentionDays: 7 | 30 | 90;
-}
+export interface Settings { autoCleanup: boolean; retentionDays: 7 | 30 | 90; }

@@ -3,61 +3,60 @@ import { Alert, Box, Button, Chip, CircularProgress, Grid, IconButton, Paper, Sn
 import CloseRoundedIcon from '@mui/icons-material/CloseRounded';
 import CloudUploadOutlinedIcon from '@mui/icons-material/CloudUploadOutlined';
 import DescriptionOutlinedIcon from '@mui/icons-material/DescriptionOutlined';
-import PrintOutlinedIcon from '@mui/icons-material/PrintOutlined';
 import { api } from './api';
+import { commonStyles as s } from './styles';
 import { displayFileName } from './fileName';
-import type { JobStatus, PrintJob, PrinterState } from './types';
-
-const statusMap: Record<JobStatus, [string, 'warning' | 'primary' | 'success' | 'error' | 'default']> = {
-  queued: ['У черзі', 'warning'], printing: ['Друкується', 'primary'], completed: ['Завершено', 'success'], error: ['Помилка', 'error'], cancelled: ['Скасовано', 'default'],
-};
+import { statusLabels, type PrintJob, type PrinterState } from './types';
 const formatDate = (date: string): string => new Intl.DateTimeFormat('uk-UA', { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(date));
-
+const idsKey = 'printflow-document-ids';
+function savedIds(): string[] {
+  try { const value: unknown = JSON.parse(sessionStorage.getItem(idsKey) || '[]'); return Array.isArray(value) ? value.filter((id): id is string => typeof id === 'string').slice(-100) : []; }
+  catch { return []; }
+}
 export default function Home() {
   const [files, setFiles] = useState<File[]>([]);
+  const [ids, setIds] = useState(savedIds);
   const [jobs, setJobs] = useState<PrintJob[]>([]);
-  const [printer, setPrinter] = useState<PrinterState | null>(null);
+  const [server, setServer] = useState<PrinterState | null>(null);
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<{ type: 'success' | 'error' | 'warning'; text: string } | null>(null);
   const load = useCallback(async (): Promise<void> => {
-    try { setJobs(await api.jobs()); setPrinter(await api.health()); }
-    catch { setPrinter({ printer: 'offline', message: 'Сервер недоступний' }); }
-  }, []);
-  useEffect(() => { void load(); const timer = setInterval(() => void load(), 1500); return () => clearInterval(timer); }, [load]);
-
+    try { const [records, health] = await Promise.all([api.jobs(ids), api.health()]); setJobs(records); setServer(health); }
+    catch { setServer({ status: 'offline', printingEnabled: false, message: 'Сервер недоступний' }); }
+  }, [ids]);
+  useEffect(() => { void load(); const timer = setInterval(() => void load(), 15000); return () => clearInterval(timer); }, [load]);
   const chooseFiles = (event: ChangeEvent<HTMLInputElement>): void => {
     const selected = Array.from(event.target.files || []);
+    event.target.value = '';
     if (selected.length > 10) { setNotice({ type: 'warning', text: 'Можна вибрати максимум 10 файлів.' }); return; }
+    if (selected.some((file) => file.size > 10 * 1024 * 1024)) { setNotice({ type: 'warning', text: 'Розмір файлу не може перевищувати 10 МБ.' }); return; }
+    if (selected.some((file) => file.type !== 'application/pdf' && !file.name.toLowerCase().endsWith('.pdf'))) { setNotice({ type: 'warning', text: 'Дозволено лише PDF-файли.' }); return; }
     setFiles(selected);
   };
-  const removeFile = (index: number): void => setFiles((current) => current.filter((_, fileIndex) => fileIndex !== index));
   const submit = async (): Promise<void> => {
-    if (!files.length) { setNotice({ type: 'warning', text: 'Оберіть хоча б один PDF-файл.' }); return; }
+    if (!files.length || busy) return;
     setBusy(true);
-    try { const result = await api.upload(files); setFiles([]); await load(); setNotice({ type: 'success', text: `До черги додано документів: ${result.jobs.length}.` }); }
-    catch (error) { setNotice({ type: 'error', text: error instanceof Error ? error.message : 'Сталася помилка.' }); }
+    try {
+      const result = await api.upload(files);
+      const nextIds = [...ids, ...result.jobs.map((job) => job.id)].slice(-100);
+      sessionStorage.setItem(idsKey, JSON.stringify(nextIds)); setIds(nextIds); setFiles([]);
+      setNotice({ type: 'success', text: `Документів збережено: ${result.jobs.length}. Фізичний друк не виконується.` });
+    } catch (error) { setNotice({ type: 'error', text: error instanceof Error ? error.message : 'Сталася помилка.' }); }
     finally { setBusy(false); }
   };
-  const cancel = async (id: string): Promise<void> => {
-    try { await api.cancel(id); await load(); }
-    catch (error) { setNotice({ type: 'error', text: error instanceof Error ? error.message : 'Сталася помилка.' }); }
-  };
-  const activeJobs = jobs.filter((job) => ['queued', 'printing'].includes(job.status)).length;
-  const printerReady = printer?.printer === 'ready';
-
   return <>
-    <Box className="page-header"><Box><Typography variant="h4" className="page-title">Черга друку</Typography><Typography className="page-subtitle">Додайте документи та відстежуйте їхній стан у реальному часі.</Typography></Box><Chip className="status-chip" icon={<PrintOutlinedIcon />} label={printerReady ? 'Принтер готовий' : 'Принтер недоступний'} color={printerReady ? 'success' : 'default'} variant="outlined" /></Box>
-    <Grid container spacing={2.5} className="home-grid">
-      <Grid size={{ xs: 12, md: 7 }}><Paper className="panel"><Typography variant="h6" className="panel-title">Нові документи</Typography><Typography variant="body2" className="panel-description">Оберіть до 10 PDF-файлів розміром до 10 МБ кожен.</Typography>
-        <Box className="upload-zone"><CloudUploadOutlinedIcon className="upload-icon" /><Typography className="upload-title">Оберіть PDF-файли</Typography><Typography variant="body2" className="upload-note">Файли будуть послідовно додані до черги.</Typography><Button component="label" variant="contained">Вибрати файли<input hidden type="file" accept="application/pdf,.pdf" multiple onChange={chooseFiles} /></Button></Box>
-        {files.length > 0 && <Stack className="file-list">{files.map((file, index) => <Box className="file-item" key={`${file.name}-${file.lastModified}`}><DescriptionOutlinedIcon color="action" fontSize="small" /><Typography variant="body2" className="file-name">{file.name}</Typography><IconButton size="small" onClick={() => removeFile(index)} aria-label="Прибрати файл"><CloseRoundedIcon fontSize="small" /></IconButton></Box>)}</Stack>}
-        <Button className="queue-submit" variant="contained" size="large" disabled={busy || !files.length} onClick={() => void submit()}>{busy ? <CircularProgress size={20} color="inherit" /> : `Додати до черги${files.length ? ` (${files.length})` : ''}`}</Button>
+    <Box sx={s.pageHeader}><Box><Typography variant="h4" sx={s.pageTitle}>Завантаження документів</Typography><Typography sx={s.pageSubtitle}>Збережіть PDF на сервері для майбутнього друку.</Typography></Box><Chip sx={s.statusChip} label={server?.status === 'ready' ? 'Сервер доступний' : 'Немає зв’язку'} color={server?.status === 'ready' ? 'success' : 'default'} variant="outlined" /></Box>
+    <Grid container spacing={2.5} sx={s.homeGrid}>
+      <Grid size={{ xs: 12, md: 7 }}><Paper sx={s.panel}><Typography variant="h6" sx={s.panelTitle}>Нові документи</Typography><Typography variant="body2" sx={s.panelDescription}>Оберіть до 10 PDF-файлів розміром до 10 МБ кожен.</Typography>
+        <Box sx={s.uploadZone}><CloudUploadOutlinedIcon sx={s.uploadIcon} /><Typography sx={s.uploadTitle}>Оберіть PDF-файли</Typography><Typography variant="body2" sx={s.uploadNote}>Файли буде збережено й зареєстровано в історії.</Typography><Button component="label" variant="contained" disabled={busy}>Вибрати файли<input hidden type="file" accept="application/pdf,.pdf" multiple onChange={chooseFiles} /></Button></Box>
+        {files.length > 0 && <Stack sx={s.fileList}>{files.map((file, index) => <Box sx={s.fileItem} key={`${file.name}-${index}`}><DescriptionOutlinedIcon color="action" fontSize="small" /><Typography variant="body2" sx={s.fileName}>{file.name}</Typography><IconButton size="small" disabled={busy} onClick={() => setFiles((current) => current.filter((_, i) => i !== index))} aria-label="Прибрати файл"><CloseRoundedIcon fontSize="small" /></IconButton></Box>)}</Stack>}
+        <Button sx={s.queueSubmit} variant="contained" size="large" disabled={busy || !files.length} onClick={() => void submit()}>{busy ? <CircularProgress size={20} color="inherit" /> : `Завантажити${files.length ? ` (${files.length})` : ''}`}</Button>
       </Paper></Grid>
-      <Grid size={{ xs: 12, md: 5 }}><Paper className="panel system-panel"><Box><Typography variant="overline" className="system-label">СТАН СИСТЕМИ</Typography><Typography variant="h3" className="system-value">{activeJobs}</Typography><Typography className="system-description">активних завдань у черзі</Typography></Box><Box className="system-bottom"><Box className={`status-track${printerReady ? '' : ' offline'}`}><Box className="status-indicator" /></Box><Typography variant="body2" className="system-description">{printer?.message || 'Перевірка стану сервера…'}</Typography></Box></Paper></Grid>
+      <Grid size={{ xs: 12, md: 5 }}><Paper sx={[s.panel, s.systemPanel]}><Box><Typography variant="overline" sx={s.systemLabel}>СТАН СИСТЕМИ</Typography><Typography variant="h3" sx={s.systemValue}>{jobs.filter((job) => job.status === 'awaiting_setup').length}</Typography><Typography sx={s.systemDescription}>ваших документів очікують налаштування друку</Typography></Box><Box sx={s.systemBottom}><Alert severity="info">Фізичний принтер ще не підключено. Документи не надсилаються на друк.</Alert><Typography variant="body2" sx={s.systemDescription}>{server?.message || 'Перевірка стану сервера…'}</Typography></Box></Paper></Grid>
     </Grid>
-    <Paper className="panel panel-table"><Box className="table-heading"><Typography variant="h6" className="panel-title">Поточні завдання</Typography><Typography variant="body2" className="table-subheading">Оновлюється автоматично.</Typography></Box><Box className="table-scroll"><Table className="jobs-table"><TableHead><TableRow><TableCell>Документ</TableCell><TableCell>Додано</TableCell><TableCell>Статус</TableCell><TableCell align="right">Дія</TableCell></TableRow></TableHead><TableBody>
-      {jobs.length ? jobs.map((job) => { const [label, color] = statusMap[job.status]; return <TableRow key={job.id} hover><TableCell><Box className="file-cell"><DescriptionOutlinedIcon color="action" fontSize="small" />{displayFileName(job.fileName)}</Box></TableCell><TableCell>{formatDate(job.createdAt)}</TableCell><TableCell><Chip label={label} color={color} size="small" variant="outlined" /></TableCell><TableCell align="right">{['queued', 'printing'].includes(job.status) && <Button size="small" color="error" onClick={() => void cancel(job.id)}>Скасувати</Button>}</TableCell></TableRow>; }) : <TableRow><TableCell colSpan={4} align="center" className="empty-cell">У черзі ще немає завдань.</TableCell></TableRow>}
+    <Paper sx={[s.panel, s.panelTable]}><Box sx={s.tableHeading}><Typography variant="h6" sx={s.panelTitle}>Ваші документи</Typography><Typography variant="body2" sx={s.tableSubheading}>Останні 100 документів цієї вкладки. Повна історія доступна адміністратору.</Typography></Box><Box sx={s.tableScroll}><Table sx={s.jobsTable}><TableHead><TableRow><TableCell>Документ</TableCell><TableCell>Завантажено</TableCell><TableCell>Статус</TableCell></TableRow></TableHead><TableBody>
+      {jobs.length ? jobs.map((job) => <TableRow key={job.id} hover><TableCell><Box sx={s.fileCell}><DescriptionOutlinedIcon color="action" fontSize="small" />{displayFileName(job.fileName)}</Box></TableCell><TableCell>{formatDate(job.createdAt)}</TableCell><TableCell><Chip label={statusLabels[job.status] || 'Невідомий статус'} color={job.status === 'error' ? 'error' : 'warning'} size="small" variant="outlined" /></TableCell></TableRow>) : <TableRow><TableCell colSpan={3} align="center" sx={s.emptyCell}>Ви ще не завантажили документи в цій вкладці.</TableCell></TableRow>}
     </TableBody></Table></Box></Paper>
-    <Snackbar open={Boolean(notice)} autoHideDuration={4000} onClose={() => setNotice(null)}>{notice ? <Alert severity={notice.type} onClose={() => setNotice(null)}>{notice.text}</Alert> : undefined}</Snackbar>
+    <Snackbar open={Boolean(notice)} autoHideDuration={5000} onClose={() => setNotice(null)}>{notice ? <Alert severity={notice.type} onClose={() => setNotice(null)}>{notice.text}</Alert> : undefined}</Snackbar>
   </>;
 }

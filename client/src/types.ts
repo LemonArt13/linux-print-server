@@ -1,13 +1,11 @@
-export type JobStatus = 'queued' | 'printing' | 'completed' | 'error' | 'cancelled';
-
-export interface PrintJob {
-  id: string;
-  fileName: string;
-  status: JobStatus;
-  createdAt: string;
-  updatedAt: string;
+export type JobStatus = 'uploaded' | 'stored' | 'awaiting_setup' | 'error' | 'queued' | 'printing' | 'completed' | 'cancelled';
+export interface HistoryRecord {
+  id: string; fileName: string; status: JobStatus; createdAt: string; finishedAt: string; size?: number; message?: string;
 }
-
-export interface PrinterState { printer: 'ready' | 'offline'; message: string; }
-export interface HistoryRecord { id: string; fileName: string; status: JobStatus; createdAt: string; finishedAt: string; }
+export type PrintJob = HistoryRecord;
+export interface PrinterState { status: 'ready' | 'offline'; printingEnabled: boolean; message: string; }
 export interface Settings { autoCleanup: boolean; retentionDays: 7 | 30 | 90; }
+export const statusLabels: Record<JobStatus, string> = {
+  uploaded: 'Завантажено', stored: 'Збережено', awaiting_setup: 'Очікує налаштування друку', error: 'Помилка',
+  queued: 'Архів імітації: у черзі', printing: 'Архів імітації: обробка', completed: 'Архів імітації: завершено', cancelled: 'Архів імітації: скасовано',
+};

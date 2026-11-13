@@ -1,64 +1,44 @@
-import fs from 'node:fs';
 import crypto from 'node:crypto';
-import { addHistory } from './historyStore';
-import type { PrintJob, PublicJob } from './types';
-
-const jobs: PrintJob[] = [];
-let processing = false;
-let activeTimer: NodeJS.Timeout | null = null;
+import fs from 'node:fs';
+import path from 'node:path';
+import { addHistory, uploadDir } from './historyStore';
+import type { HistoryRecord } from './types';
 
 function normalizeFileName(name: string): string {
-  if (!/[ÐÑ]/.test(name)) return name;
-  const decoded = Buffer.from(name, 'latin1').toString('utf8');
-  return decoded.includes('�') ? name : decoded;
+  const decoded = /[ÐÑ]/.test(name) ? Buffer.from(name, 'latin1').toString('utf8') : name;
+  return path.basename(decoded.includes('�') ? name : decoded).replace(/[\r\n\x00-\x1f]/g, '').slice(0, 255) || 'document.pdf';
 }
-
-function publicJob(job: PrintJob): PublicJob {
-  const { filePath: _filePath, ...safeJob } = job;
-  return safeJob;
+export function verifyPdf(file: Express.Multer.File): boolean {
+  const fd = fs.openSync(file.path, 'r');
+  try {
+    const header = Buffer.alloc(5);
+    return fs.readSync(fd, header, 0, 5, 0) === 5 && header.toString('ascii') === '%PDF-';
+  } finally { fs.closeSync(fd); }
 }
-
-function removeTempFile(job: PrintJob): void { fs.unlink(job.filePath, () => undefined); }
-
-function recordJob(job: PrintJob): void {
-  addHistory({ id: job.id, fileName: job.fileName, status: job.status, createdAt: job.createdAt, finishedAt: new Date().toISOString() });
+export function registerDocuments(files: Express.Multer.File[]): HistoryRecord[] {
+  const now = new Date().toISOString();
+  const records = files.map((file): HistoryRecord => ({
+    id: crypto.randomUUID(), fileName: normalizeFileName(file.originalname), size: file.size,
+    status: 'awaiting_setup', createdAt: now, finishedAt: now,
+    message: 'PDF збережено. Очікує налаштування друку; фізичний друк не виконується.',
+  }));
+  const moved: string[] = [];
+  try {
+    files.forEach((file, index) => {
+      const target = path.join(uploadDir, `${records[index].id}.pdf`);
+      fs.renameSync(file.path, target);
+      fs.chmodSync(target, 0o600);
+      moved.push(target);
+    });
+    addHistory(records);
+    return records;
+  } catch (error) {
+    // Only files created by this unsuccessful request are removed.
+    moved.forEach((target) => { if (fs.existsSync(target)) fs.unlinkSync(target); });
+    throw error;
+  }
 }
-
-function advanceQueue(): void {
-  if (processing) return;
-  const next = jobs.find((job) => job.status === 'queued');
-  if (!next) return;
-  processing = true;
-  next.status = 'printing';
-  next.updatedAt = new Date().toISOString();
-  activeTimer = setTimeout(() => {
-    next.status = 'completed';
-    next.updatedAt = new Date().toISOString();
-    recordJob(next);
-    removeTempFile(next);
-    processing = false;
-    activeTimer = null;
-    setTimeout(advanceQueue, 350);
-  }, 3500);
-}
-
-export function addJob(file: Express.Multer.File): PublicJob {
-  const job: PrintJob = { id: crypto.randomUUID(), fileName: normalizeFileName(file.originalname), filePath: file.path, status: 'queued', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() };
-  jobs.push(job);
-  setTimeout(advanceQueue, 250);
-  return publicJob(job);
-}
-
-export function getJobs(): PublicJob[] { return jobs.map(publicJob); }
-
-export function cancelJob(id: string): PublicJob | null {
-  const job = jobs.find((item) => item.id === id);
-  if (!job || ['completed', 'error', 'cancelled'].includes(job.status)) return null;
-  if (job.status === 'printing') { if (activeTimer) clearTimeout(activeTimer); activeTimer = null; processing = false; }
-  job.status = 'cancelled';
-  job.updatedAt = new Date().toISOString();
-  recordJob(job);
-  removeTempFile(job);
-  setTimeout(advanceQueue, 250);
-  return publicJob(job);
+export function recordRejection(files: Express.Multer.File[], message: string): void {
+  const now = new Date().toISOString();
+  addHistory(files.map((file) => ({ id: crypto.randomUUID(), fileName: normalizeFileName(file.originalname), size: file.size, status: 'error', createdAt: now, finishedAt: now, message })));
 }

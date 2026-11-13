@@ -1,52 +1,63 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import crypto from 'node:crypto';
 import type { HistoryRecord, Settings } from './types';
 
-const dataDir = path.join(__dirname, '..', 'data');
+export const dataDir = path.resolve(process.env.DATA_DIR || path.join(__dirname, '..', 'data'));
+export const uploadDir = path.resolve(process.env.UPLOAD_DIR || path.join(__dirname, '..', 'uploads'));
 export const historyPath = path.join(dataDir, 'print-history.txt');
 const settingsPath = path.join(dataDir, 'settings.json');
-const defaultSettings: Settings = { autoCleanup: false, retentionDays: 30 };
+const defaults: Settings = { autoCleanup: false, retentionDays: 30 };
+fs.mkdirSync(dataDir, { recursive: true, mode: 0o700 });
+fs.mkdirSync(uploadDir, { recursive: true, mode: 0o700 });
 
-function ensureFiles(): void {
-  fs.mkdirSync(dataDir, { recursive: true });
-  if (!fs.existsSync(historyPath)) fs.writeFileSync(historyPath, '', 'utf8');
-  if (!fs.existsSync(settingsPath)) fs.writeFileSync(settingsPath, JSON.stringify(defaultSettings, null, 2), 'utf8');
+// One Node process owns this store. Synchronous read/replace operations cannot interleave.
+// Rename replaces a complete file; failed writes leave the previous version intact.
+function atomicWrite(target: string, contents: string): void {
+  const temporary = `${target}.${crypto.randomUUID()}.tmp`;
+  let fd: number | undefined;
+  try {
+    fd = fs.openSync(temporary, 'wx', 0o600);
+    fs.writeFileSync(fd, contents, 'utf8');
+    fs.fsyncSync(fd);
+    fs.closeSync(fd);
+    fd = undefined;
+    fs.renameSync(temporary, target);
+  } finally {
+    if (fd !== undefined) fs.closeSync(fd);
+    if (fs.existsSync(temporary)) fs.unlinkSync(temporary);
+  }
 }
 
 export function getHistory(): HistoryRecord[] {
-  ensureFiles();
-  return fs.readFileSync(historyPath, 'utf8').split('\n').filter(Boolean).flatMap((line): HistoryRecord[] => {
-    try { return [JSON.parse(line) as HistoryRecord]; } catch { return []; }
-  }).sort((first, second) => new Date(second.finishedAt).getTime() - new Date(first.finishedAt).getTime());
+  if (!fs.existsSync(historyPath)) return [];
+  return fs.readFileSync(historyPath, 'utf8').split('\n').filter(Boolean).map((line) => {
+    const value = JSON.parse(line) as HistoryRecord;
+    if (!value.id || !value.fileName || !value.createdAt || !value.finishedAt || !value.status) throw new Error('INVALID_HISTORY');
+    return value;
+  }).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
 }
-
-export function addHistory(record: HistoryRecord): void {
-  ensureFiles();
-  fs.appendFileSync(historyPath, `${JSON.stringify(record)}\n`, 'utf8');
+export function addHistory(records: HistoryRecord[]): void {
+  const current = getHistory();
+  atomicWrite(historyPath, [...current, ...records].map((record) => JSON.stringify(record)).join('\n') + '\n');
 }
-
-export function clearHistory(): void { ensureFiles(); fs.writeFileSync(historyPath, '', 'utf8'); }
-
+export function clearHistory(): void { atomicWrite(historyPath, ''); }
 export function getSettings(): Settings {
-  ensureFiles();
-  try { return { ...defaultSettings, ...(JSON.parse(fs.readFileSync(settingsPath, 'utf8')) as Partial<Settings>) }; }
-  catch { return { ...defaultSettings }; }
+  if (!fs.existsSync(settingsPath)) return { ...defaults };
+  return { ...defaults, ...JSON.parse(fs.readFileSync(settingsPath, 'utf8')) };
 }
-
-export function saveSettings(settings: Partial<Settings>): Settings {
-  const retentionDays = Number(settings.retentionDays);
-  const clean: Settings = { autoCleanup: Boolean(settings.autoCleanup), retentionDays: ([7, 30, 90].includes(retentionDays) ? retentionDays : 30) as Settings['retentionDays'] };
-  fs.writeFileSync(settingsPath, JSON.stringify(clean, null, 2), 'utf8');
-  return clean;
+export function saveSettings(value: Partial<Settings>): Settings {
+  if (typeof value.autoCleanup !== 'boolean' || ![7, 30, 90].includes(Number(value.retentionDays))) throw new Error('INVALID_SETTINGS');
+  const settings: Settings = { autoCleanup: value.autoCleanup, retentionDays: Number(value.retentionDays) as Settings['retentionDays'] };
+  atomicWrite(settingsPath, JSON.stringify(settings, null, 2));
+  return settings;
 }
-
 export function cleanupOldHistory(): number {
   const settings = getSettings();
   if (!settings.autoCleanup) return 0;
-  const cutoff = Date.now() - settings.retentionDays * 24 * 60 * 60 * 1000;
   const current = getHistory();
-  const fresh = current.filter((item) => new Date(item.finishedAt).getTime() >= cutoff);
-  const removed = current.length - fresh.length;
-  if (removed) fs.writeFileSync(historyPath, fresh.map((item) => JSON.stringify(item)).join('\n') + (fresh.length ? '\n' : ''), 'utf8');
-  return removed;
+  const cutoff = Date.now() - settings.retentionDays * 86400000;
+  const fresh = current.filter((record) => new Date(record.finishedAt).getTime() >= cutoff);
+  if (fresh.length !== current.length) atomicWrite(historyPath, fresh.map((record) => JSON.stringify(record)).join('\n') + (fresh.length ? '\n' : ''));
+  return current.length - fresh.length;
 }
