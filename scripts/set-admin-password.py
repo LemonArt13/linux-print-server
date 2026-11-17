@@ -9,8 +9,8 @@ import sys
 
 target = Path(sys.argv[1] if len(sys.argv) > 1 else 'server/.env')
 password = getpass.getpass('Новий пароль адміністратора: ')
-if len(password) < 12:
-    raise SystemExit('Використайте щонайменше 12 символів.')
+if not password:
+    raise SystemExit('Пароль не може бути порожнім.')
 if password != getpass.getpass('Повторіть пароль: '):
     raise SystemExit('Паролі не збігаються.')
 salt = secrets.token_hex(16)
