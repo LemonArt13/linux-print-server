@@ -7,7 +7,7 @@
     "typecheck": "npm exec --prefix client -- tsc --noEmit -p client/tsconfig.json && npm exec --prefix server -- tsc --noEmit -p server/tsconfig.json",
     "build": "npm run build --prefix client && npm run build --prefix server",
     "start": "npm start --prefix server",
-    "test": "node --test tests/api.test.mjs"
+    "test": "node --test tests/*.test.mjs"
   },
   "devDependencies": {
     "concurrently": "^9.1.2"

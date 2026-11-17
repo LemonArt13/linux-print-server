@@ -1,4 +1,5 @@
 export type JobStatus = 'uploaded' | 'stored' | 'awaiting_setup' | 'error';
+export type PrintOutcome = 'completed' | 'error' | 'cancelled';
 export interface HistoryRecord {
   id: string;
   fileName: string;
@@ -8,4 +9,7 @@ export interface HistoryRecord {
   size?: number;
   message?: string;
 }
-export interface Settings { autoCleanup: boolean; retentionDays: 7 | 30 | 90; }
+export interface Settings {
+  autoCleanup: boolean;
+  retentionDays: 7 | 30 | 90;
+}
