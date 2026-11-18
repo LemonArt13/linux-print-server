@@ -17,4 +17,4 @@ npm start
 
 Повна інструкція від встановлення Ubuntu до доступу з телефона: **[UBUNTU_SERVER_GUIDE.md](UBUNTU_SERVER_GUIDE.md)**.
 
-Код інтерфейсу — `client/src`, сервер — `server/src`, служба — `deploy/printflow.service`, оновлення — `deploy.sh`. Звіт і результати перевірок містяться в [report](report/).
+Код інтерфейсу — `client/src`, сервер — `server/src`, служба — `deploy/printflow.service`, оновлення — `deploy.sh`.
