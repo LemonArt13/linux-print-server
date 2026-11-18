@@ -123,7 +123,10 @@ export function cleanupOldHistory(): number {
   if (!settings.autoCleanup) return 0;
   const current = getHistory();
   const cutoff = Date.now() - settings.retentionDays * 86400000;
-  const fresh = current.filter((record) => new Date(record.finishedAt).getTime() >= cutoff);
+  // Pending documents still need their history entry for the future print worker.
+  const fresh = current.filter(
+    (record) => !isFinished(record.status) || new Date(record.finishedAt).getTime() >= cutoff,
+  );
   if (fresh.length !== current.length)
     atomicWrite(
       historyPath,

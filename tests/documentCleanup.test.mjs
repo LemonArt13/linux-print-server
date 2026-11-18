@@ -68,6 +68,19 @@ test('finished PDFs are deleted, history and pending documents survive, failures
     store.addHistory([{ ...waiting[0].record, id: '../outside', status: 'completed' }]);
     store.cleanupFinishedDocuments();
     assert.equal(existsSync(outside), true);
+
+    // Retention must not orphan a pending PDF by removing its only history entry.
+    const oldDate = new Date(Date.now() - 31 * 86400000).toISOString();
+    const oldPending = { ...waiting[0].record, id: randomUUID(), createdAt: oldDate, finishedAt: oldDate };
+    const oldFinished = { ...oldPending, id: randomUUID(), status: 'completed' };
+    store.addHistory([oldPending, oldFinished]);
+    const pendingPath = path.join(store.uploadDir, `${oldPending.id}.pdf`);
+    writeFileSync(pendingPath, '%PDF-1.4\n%%EOF\n');
+    store.saveSettings({ autoCleanup: true, retentionDays: 30 });
+    assert.equal(store.cleanupOldHistory(), 1);
+    assert.ok(store.getHistory().some((record) => record.id === oldPending.id));
+    assert.equal(existsSync(pendingPath), true);
+    assert.ok(!store.getHistory().some((record) => record.id === oldFinished.id));
     store.clearHistory();
     assert.equal(store.getHistory().length, 0);
     for (const { filePath } of waiting) assert.equal(existsSync(filePath), true);

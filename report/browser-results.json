@@ -1,8 +1,0 @@
-{
-  "url": "http://10.211.55.10:4000",
-  "homeStatus": 200,
-  "homeHealth": "ready",
-  "adminLogin": "rendered",
-  "pageErrors": [],
-  "failedRequests": []
-}

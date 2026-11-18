@@ -2,7 +2,7 @@
   "name": "lan-print-manager-prototype",
   "private": true,
   "scripts": {
-    "install:all": "npm install --prefix server && npm install --prefix client",
+    "install:all": "npm ci --prefix server && npm ci --prefix client",
     "dev": "concurrently \"npm run dev --prefix server\" \"npm run dev --prefix client\"",
     "typecheck": "npm exec --prefix client -- tsc --noEmit -p client/tsconfig.json && npm exec --prefix server -- tsc --noEmit -p server/tsconfig.json",
     "build": "npm run build --prefix client && npm run build --prefix server",

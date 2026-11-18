@@ -1,225 +1,451 @@
-# Ubuntu Server: налаштування, запуск і демонстрація PrintFlow
+# Запуск PrintFlow на Ubuntu Server
 
-Інструкція для наявної VM **Ubuntu Linux** у Parallels Desktop. Проєкт: «Розробка веборієнтованої системи керування друком документів на базі Linux-сервера». Поточний етап — приймання PDF та демонстрація сайту; фізичний друк не реалізований.
+Це основна інструкція встановлення. Виконуйте кроки по черзі від звичайного користувача Ubuntu з правом `sudo`. Команди в блоках призначені для термінала Ubuntu, якщо прямо не зазначено інше. `sudo` може запитати пароль користувача Ubuntu; під час введення символи не показуються.
 
-## 1. Адреси й каталоги
+Сайт працює без принтера: він приймає PDF, зберігає їх і показує історію. CUPS та фізичний друк ще не з'єднані з вебзастосунком.
 
-| Що | Значення |
-|---|---|
-| Ubuntu | Ubuntu 26.10, ARM64 |
-| Користувач SSH/розгортання | `artem` |
-| Мережа Parallels | Shared Network |
-| IP Ubuntu | `10.211.55.10` — може змінитися після зміни мережі/DHCP |
-| Сайт із Mac | `http://10.211.55.10:4000` |
-| Адміністративна сторінка | `http://10.211.55.10:4000/admin` |
-| API стану | `http://10.211.55.10:4000/api/health` |
-| Репозиторій | приватний `LemonArt13/linux-print-server` |
-| Копія Git на Ubuntu | `/opt/printflow/repo` |
-| Активна збірка | `/opt/printflow/current` — symlink на release |
-| Збірки | `/opt/printflow/releases/` |
-| Служба | `printflow.service` |
-| Користувач служби | `printflow`, без інтерактивного входу |
-| Конфігурація | `/etc/printflow.env`, root, права 0600 |
-| Журнал документів | `/var/lib/printflow/data/print-history.txt` |
-| PDF | `/var/lib/printflow/uploads/` |
+**Межі перевірки, 18.11.2026.** Код перевірено на macOS і на наявній Ubuntu Server 26.10 у тимчасовому каталозі. Встановлення чистої Ubuntu 24.04, команди `apt`, налаштування SSH-ключа GitHub, початкове створення служби, UFW, зміна мережі VM та підключення принтера в цьому сеансі **не перевірені виконанням**. Нижче ці групи також позначені. Фактичні результати — у [report/TEST_RESULTS.md](report/TEST_RESULTS.md).
 
-## 2. Щоденний запуск перед демонстрацією
+## КРОК 1. Підготовка Ubuntu Server
 
-1. У Parallels запустіть існуючу VM **Ubuntu Linux**. Не створюйте нову VM.
-2. У терміналі Mac підключіться:
+Для нового сервера використовуйте **Ubuntu Server 24.04 LTS**: це версія з тривалою підтримкою, стандартні оновлення безпеки якої передбачені до травня 2029 року. [Відомості Ubuntu](https://documentation.ubuntu.com/release-notes/24.04/). Наявний сервер проєкту працює на 26.10; для демонстрації його перевстановлення не потрібне.
+
+Завантажте ISO з [офіційного сайту Ubuntu](https://ubuntu.com/download/server). Для звичайного ПК обирайте amd64, для VM на Mac з Apple Silicon — arm64. Установіть систему на окремий комп'ютер або нову VM. Не обирайте диск із потрібними вам даними.
+
+В інсталяторі підключіть Ethernet або мережевий адаптер VM; для початку залиште автоматичне отримання адреси (DHCP). Створіть користувача, наприклад `artem`, і власний пароль. Увімкніть OpenSSH Server, якщо хочете працювати з іншого комп'ютера. Додаткові серверні застосунки не потрібні. Після встановлення від'єднайте ISO та перезавантажте систему.
+
+Для VM одразу оберіть **Bridged Network / Мережевий міст** до адаптера з домашньою мережею. Тоді Ubuntu, телефон і ноутбук зможуть бути в одній локальній мережі. Докладніше — крок 7.
+
+*Встановлення ОС та зміна параметрів VM у цьому сеансі не перевірені.*
+
+## КРОК 2. Перші налаштування Ubuntu
+
+Увійдіть у консолі під створеним користувачем. Перевірте систему, адресу та доступ до інтернету:
 
 ```bash
-ssh -i ~/.ssh/knu_printflow artem@10.211.55.10
-```
-
-3. На Ubuntu перевірте службу:
-
-```bash
-systemctl status printflow.service --no-pager
-curl -fsS http://127.0.0.1:4000/api/health
+whoami
+cat /etc/os-release
 hostname -I
-```
-
-4. У браузері Mac відкрийте `http://10.211.55.10:4000`.
-
-Служба має автозапуск після завантаження **Ubuntu**. Для цього VM повинна працювати: автозапуск служби не запускає Parallels та саму VM, не заважає macOS засинати. У production окремий Vite запускати не потрібно: Express віддає зібраний frontend і `/api` на одному порту 4000.
-
-Якщо служба не працює:
-
-```bash
-sudo systemctl restart printflow.service
-systemctl status printflow.service --no-pager
-journalctl -u printflow.service -n 60 --no-pager
-```
-
-Для `artem` налаштовано право sudo без пароля **тільки** на restart/stop цієї служби. Інші адміністративні дії можуть запитати пароль Ubuntu.
-
-## 3. Перевірка мережі
-
-На Mac:
-
-```bash
-prlctl list -a
-prlctl list 'Ubuntu Linux' -i
-nc -z -G 3 10.211.55.10 22
-curl --fail --max-time 5 http://10.211.55.10:4000/api/health
-open http://10.211.55.10:4000
-```
-
-На Ubuntu:
-
-```bash
-ip -br a
 ip route
-ss -ltn | rg ':4000'  # якщо rg встановлено
-# Стандартний варіант без rg:
-ss -ltn 'sport = :4000'
-sudo ufw status
+getent hosts ubuntu.com
+ping -c 3 1.1.1.1
 ```
 
-`HOST=0.0.0.0` означає прослуховування IPv4-інтерфейсів Ubuntu. На поточному етапі порт не перенаправляється з публічного інтернету.
+Команда `hostname -I` показує адреси сервера. Якщо `ping` заблокований мережею, це ще не означає відсутності інтернету: перевірте також результат оновлення пакетів.
 
-**Телефон:** у Shared Network адреса `10.211.55.10` належить приватній підмережі Mac–VM. Телефон у домашньому Wi-Fi зазвичай не має прямого маршруту до неї. Для демонстрації з телефона можна погоджено змінити Parallels → Hardware → Network → Bridged Network → потрібний Wi-Fi/Ethernet. Після цього повторно виконайте `ip -br a`, підключіться до **нової** адреси та перевірте firewall. Якщо UFW активний, дозвольте 4000/tcp тільки зі справжньої довіреної LAN-підмережі. Не копіюйте адресу підмережі навмання. Не відкривайте порт на роутері в інтернет.
-
-## 4. Як оновити проєкт
-
-Спочатку зміни перевіряються на Mac і публікуються в існуючий GitHub-репозиторій після перегляду:
-
-```bash
-npm run build
-npm run typecheck
-npm test
-git status
-# Перевірити diff і склад коміту, не додавати .env/дані/секрети.
-```
-
-На Ubuntu:
-
-```bash
-bash /opt/printflow/repo/deploy.sh
-```
-
-Скрипт бере блокування від паралельного запуску, перевіряє чистоту checkout, робить `git pull --ff-only`, створює новий release, встановлює Linux-залежності через `npm ci`, збирає клієнт і сервер, перемикає `current`, перезапускає systemd і перевіряє `/api/health`. До успішного збирання попередній release працює. За невдалої health-перевірки скрипт повертає попередній release та перезапускає його. Коротка перерва під час restart можлива; це не схема безперервного оновлення.
-
-Секрети та робочі дані зберігаються поза Git checkout. Не копіюйте `node_modules` із Mac. Не виконуйте `git reset --hard`, `git clean` або видалення каталогів даних для виправлення deploy без розуміння наслідків.
-
-## 5. Вхід адміністратора
-
-Під час першої підготовки створено випадковий пароль. Він записаний у `/home/artem/.config/printflow/initial-password` з правами 0600. Це приватний файл: переглядайте лише локально, не додавайте його до Git, скриншотів або звіту.
-
-Щоб установити свій пароль, на Ubuntu з термінала:
-
-```bash
-cd /opt/printflow/repo
-sudo python3 scripts/set-admin-password.py /etc/printflow.env
-sudo systemctl restart printflow.service
-```
-
-Введення пароля приховане. Для пробного проєкту дозволений будь-який непорожній пароль, без мінімальної довжини. Новий пароль застосовується після restart. Сесії адміністратора тоді завершуються; типовий строк сесії — година. Після зміни випадковий початковий пароль уже не є чинним, хоча приватний файл може залишатися.
-
-## 6. Налаштування з нуля на цій Ubuntu
-
-Цей розділ — для повторення процедури, а не команда перевстановлення наявного сервера.
-
-### 6.1. SSH
-
-На Ubuntu, якщо SSH ще не встановлено:
+Оновіть пакети:
 
 ```bash
 sudo apt update
-sudo apt install openssh-server
+sudo apt upgrade -y
+```
+
+Якщо Ubuntu повідомляє про потребу перезавантаження:
+
+```bash
+sudo reboot
+```
+
+Після перезавантаження увійдіть знову. У консолі VM також можна пройти всю інструкцію без SSH.
+
+*Оновлення пакетів та перезавантаження в цьому сеансі не виконувалися.*
+
+## КРОК 3. Встановлення потрібних програм
+
+Git завантажує код. Node.js виконує сервер, а npm встановлює JavaScript-залежності. Python потрібний лише для безпечного запису хешу пароля. `curl` перевіряє HTTP, `ufw` задає правила доступу, `usbutils` допоможе побачити USB-принтер. CUPS установимо окремо у кроці 9.
+
+```bash
+sudo apt install -y git curl ca-certificates python3 openssh-server ufw usbutils nano
 sudo systemctl enable --now ssh
 ```
 
-На Mac створюється окремий ключ, якщо його ще немає:
+У стандартному сховищі Ubuntu 24.04 може бути занадто старий Node.js. Для цього проєкту встановіть Node.js 24 через сховище NodeSource. Спочатку завантажте його налаштування, перегляньте файл, потім запустіть:
 
 ```bash
-ssh-keygen -t ed25519 -f ~/.ssh/knu_printflow -C knu-printflow-mac
-cat ~/.ssh/knu_printflow.pub
+curl -fsSL https://deb.nodesource.com/setup_24.x -o /tmp/printflow-nodesource.sh
+less /tmp/printflow-nodesource.sh
+sudo bash /tmp/printflow-nodesource.sh
+sudo apt install -y nodejs
+node --version
+npm --version
+command -v node
+/usr/bin/node --version
 ```
 
-У `~/.ssh/authorized_keys` Ubuntu додається **публічний** ключ. Права: каталог 0700, файл 0600. Приватний ключ залишається на Mac. Під час першого SSH-входу звіряється fingerprint хоста, а не вимикається перевірка.
+Із `less` виходять клавішею `q`. Очікується версія `v24...` і Node.js за шляхом `/usr/bin/node`, який використовує служба проєкту. npm входить до пакета NodeSource, окремий пакет Ubuntu `npm` тут не встановлюйте. [Документація NodeSource](https://github.com/nodesource/distributions/blob/master/DEV_README.md).
 
-### 6.2. Системні пакети й служба
+*Команди встановлення системних пакетів і NodeSource не виконувалися на чистій Ubuntu в цьому сеансі.*
 
-Із кореня проєкту на Mac:
+## КРОК 4. Підключення до GitHub і завантаження коду
+
+Git зберігає версії проєкту. `git clone` створює його локальну копію. Репозиторій: [LemonArt13/linux-print-server](https://github.com/LemonArt13/linux-print-server). Посилання можна знайти на GitHub кнопкою **Code**.
+
+Репозиторій проєкту приватний, тому використаємо окремий SSH-ключ для читання. На Ubuntu створіть ключ. Якщо файл із такою назвою вже існує, не перезаписуйте його: використайте наявний ключ, зареєстрований для цього репозиторію.
 
 ```bash
-scp -i ~/.ssh/knu_printflow deploy/bootstrap-ubuntu.sh deploy/printflow.service artem@10.211.55.10:/home/artem/
+mkdir -p ~/.ssh
+chmod 700 ~/.ssh
+ssh-keygen -t ed25519 -f ~/.ssh/printflow_github -C printflow-server
+cat ~/.ssh/printflow_github.pub
 ```
 
-На Ubuntu після перегляду скрипту:
+Під час створення можна задати пароль ключа; тоді Git запитуватиме його під час звернення. Скопіюйте **лише публічний** ключ із файла `.pub`. Власник репозиторію додає його на GitHub: **Settings → Deploy keys → Add deploy key**, без прапорця **Allow write access**. Викладачу потрібна допомога власника репозиторію або доступ до нього. Приватний ключ залишається на Ubuntu; паролі й токени до інструкції не записуються. [Deploy keys у GitHub](https://docs.github.com/en/authentication/connecting-to-github-with-ssh/managing-deploy-keys).
+
+Перевірте підключення:
 
 ```bash
-sudo bash /home/artem/bootstrap-ubuntu.sh artem
+ssh -i ~/.ssh/printflow_github -o IdentitiesOnly=yes -T git@github.com
 ```
 
-Скрипт встановлює Git, Node.js, npm, curl, Python і CUPS, створює користувача `printflow`, каталоги й systemd unit. Існуючий `/etc/printflow.env` не перезаписує. Під час цієї підготовки apt Ubuntu 26.10 пропонує Node.js 24. На іншому релізі спершу перевірте `apt-cache policy nodejs` і сумісність; скрипт не є універсальним інсталятором для всіх Ubuntu.
+При першому з'єднанні звірте показаний відбиток ключа сервера з [офіційними відбитками GitHub](https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/githubs-ssh-key-fingerprints), після цього введіть `yes`. Повідомлення про успішну автентифікацію та відсутність shell access є нормальним; команда GitHub може завершитися кодом 1.
 
-### 6.3. Приватний GitHub
-
-На Ubuntu створено окремий ключ `~/.ssh/printflow_github`. Його публічна частина зареєстрована у GitHub → Repository Settings → Deploy keys із **вимкненим Allow write access**. Особистий GitHub-токен на сервер не передається.
-
-SSH-конфігурація: `/home/artem/.ssh/printflow_config`, alias `printflow-github`. Окремий `printflow_known_hosts` містить ключі github.com, отримані з офіційного GitHub Meta API через HTTPS. При зміні ключів перевірте офіційні fingerprints; не встановлюйте `StrictHostKeyChecking=no`.
-
-Перше клонування (якщо `/opt/printflow/repo` ще не існує):
+Створіть каталог. Власником буде ваш поточний користувач:
 
 ```bash
-GIT_SSH_COMMAND='ssh -F /home/artem/.ssh/printflow_config' git clone git@printflow-github:LemonArt13/linux-print-server.git /opt/printflow/repo
-git -C /opt/printflow/repo config core.sshCommand 'ssh -F /home/artem/.ssh/printflow_config'
+sudo install -d -o "$(id -un)" -g "$(id -gn)" -m 0755 /opt/printflow
+GIT_SSH_COMMAND="ssh -i $HOME/.ssh/printflow_github -o IdentitiesOnly=yes" git clone git@github.com:LemonArt13/linux-print-server.git /opt/printflow/repo
+cd /opt/printflow/repo
+git config core.sshCommand "ssh -i $HOME/.ssh/printflow_github -o IdentitiesOnly=yes"
+ls
+```
+
+Мають бути каталоги `client`, `server`, `deploy` і файли `package.json`, `deploy.sh`. Не запускайте `git clone` вдруге в той самий каталог. Для наявної копії перейдіть у неї командою `cd /opt/printflow/repo`; оновлення описане у кроці 10.
+
+*Створення нового ключа, його додавання до GitHub і перше клонування в цьому сеансі не виконувалися.*
+
+## КРОК 5. Налаштування проєкту
+
+Установіть залежності точно за lock-файлами. Не копіюйте `node_modules` із Windows або Mac:
+
+```bash
+cd /opt/printflow/repo
+npm ci
+npm run install:all
+```
+
+Команди npm запускайте без `sudo`. Підготуйте конфігурацію **лише під час першого налаштування**:
+
+```bash
+cp server/.env.example server/.env
+chmod 600 server/.env
+python3 scripts/set-admin-password.py server/.env
+nano server/.env
+```
+
+Скрипт двічі запитає новий пароль адміністратора. Він зберігає хеш scrypt, сам пароль у файл не записується. У редакторі змініть `HOST=127.0.0.1` на `HOST=0.0.0.0`. Залиште `PORT=4000` і `SESSION_TTL_SECONDS=3600`. Рядок `ADMIN_PASSWORD_HASH` уже заповнений скриптом — не замінюйте його паролем. Збереження в `nano`: Ctrl+O, Enter, вихід: Ctrl+X. `.env` виключено з Git.
+
+Для ручної перевірки поки залиште `DATA_DIR` та `UPLOAD_DIR` закоментованими. Дані потраплятимуть до `server/data` та `server/uploads`. Під час переходу до служби використаємо окремі каталоги `/var/lib/printflow`.
+
+Зберіть клієнт і сервер:
+
+```bash
+npm run typecheck
+npm run build
+```
+
+Після успішної збірки з'являться `client/dist/index.html` і `server/dist/index.js`. Попередження Vite про пакет понад 500 кБ не зупиняє збірку. Файл `.env` потрібний серверу, налаштування IP у коді React змінювати не треба.
+
+## КРОК 6. Перший запуск сайту вручну
+
+Із кореня проєкту запустіть:
+
+```bash
+cd /opt/printflow/repo
+npm start
+```
+
+Очікуване повідомлення: `PrintFlow HTTP server started`. Поки термінал зайнятий цим процесом, залиште його відкритим. В іншій консолі Ubuntu або SSH-сеансі виконайте:
+
+```bash
+curl -fsS http://127.0.0.1:4000/api/health
+```
+
+Очікується JSON із `"status":"ready"` і `"printingEnabled":false`. Це означає, що вебсервер працює; принтер для цієї перевірки не потрібний. Express сам надає зібрані сторінки та API на порту 4000. Окремо запускати Vite на Ubuntu не треба.
+
+Для зупинки ручного запуску натисніть Ctrl+C у першому терміналі. До перевірки з іншого пристрою у кроці 7 залиште сервер запущеним.
+
+## КРОК 7. Доступ із телефона або ноутбука
+
+На Ubuntu перевірте адресу та порт:
+
+```bash
+ip -br -4 address
+ip route
+ss -ltn 'sport = :4000'
+```
+
+Для доступу через мережу в `.env` має бути `HOST=0.0.0.0`. Після зміни перезапустіть ручний процес. У `ss` має бути `0.0.0.0:4000`. Адресу `0.0.0.0` у браузер не вводять: це налаштування прослуховування.
+
+Телефон і сервер повинні бути в одній мережі. Відкрийте в браузері адресу виду `http://IP_СЕРВЕРА:4000`. Наприклад, для наявної тестової VM це `http://10.211.55.10:4000`, а адмінпанель — `http://10.211.55.10:4000/admin`. Після зміни мережі адреса буде іншою. `localhost` на телефоні означає сам телефон.
+
+У Parallels вимкніть VM штатним завершенням Ubuntu та оберіть **Hardware → Network → Bridged Network → ваш Wi-Fi/Ethernet**. У VirtualBox аналогічне налаштування називається **Bridged Adapter**. Потім запустіть VM і знову перевірте IP. Shared Network / NAT зазвичай дозволяє доступ із комп'ютера-власника VM, але не дає телефону прямого доступу до адреси VM. Гостьова Wi-Fi-мережа та ізоляція клієнтів на роутері теж можуть блокувати з'єднання.
+
+Перевірте мережевий фільтр Ubuntu:
+
+```bash
+sudo ufw status
+```
+
+Якщо він активний, дозвольте порт лише зі своєї LAN. Команда нижче запитає справжню адресу підмережі, наприклад `192.168.1.0/24`; її можна побачити на початку рядка вашого мережевого адаптера в `ip -4 route show scope link`. Запис `/24` указує розмір цієї підмережі. Не копіюйте приклад, якщо у вас інша мережа:
+
+```bash
+ip -4 route show scope link
+read -r -p 'Ваша довірена LAN-підмережа у форматі CIDR: ' PRINTFLOW_LAN
+sudo ufw allow from "$PRINTFLOW_LAN" to any port 4000 proto tcp
+sudo ufw status
+```
+
+Для доступу сайту не потрібно вмикати UFW, якщо він неактивний. Перед його окремим увімкненням налаштуйте також доступ SSH, інакше можна втратити віддалене з'єднання. Порти на інтернет-роутері не перенаправляйте. Поточний HTTP-сайт використовуйте в довіреній локальній мережі.
+
+*Доступ із фізичного телефона, нові правила UFW та перехід VM у Bridged у цьому сеансі не перевірені.*
+
+## КРОК 8. Налаштування системної служби
+
+systemd запускає сайт без відкритого термінала та після завантаження Ubuntu. Спочатку зупиніть ручний процес Ctrl+C, щоб звільнити порт 4000.
+
+Створіть окремого користувача служби й каталоги. Він не матиме інтерактивного входу:
+
+```bash
+cd /opt/printflow/repo
+id printflow >/dev/null 2>&1 || sudo useradd --system --home-dir /var/lib/printflow --shell /usr/sbin/nologin printflow
+sudo install -d -o printflow -g printflow -m 0700 /var/lib/printflow /var/lib/printflow/data /var/lib/printflow/uploads
+mkdir -p /opt/printflow/releases
+```
+
+Створіть конфігурацію служби за прикладом і встановіть пароль. Ці дві перші команди — лише для нового сервера, де `/etc/printflow.env` ще немає:
+
+```bash
+sudo install -o root -g root -m 0600 server/.env.example /etc/printflow.env
+sudo python3 scripts/set-admin-password.py /etc/printflow.env
+sudo nano /etc/printflow.env
+```
+
+У файлі служби середовища встановіть:
+
+```dotenv
+HOST=0.0.0.0
+PORT=4000
+SESSION_TTL_SECONDS=3600
+DATA_DIR=/var/lib/printflow/data
+UPLOAD_DIR=/var/lib/printflow/uploads
+```
+
+Збережіть також рядок `ADMIN_PASSWORD_HASH`, створений скриптом. Не видаляйте його під час редагування. Конфігурація служби має інші каталоги даних, тому пробні документи з кроку 6 автоматично не переносяться. Після запуску служби повторіть перевірку з новим тестовим PDF.
+
+У репозиторії вже є готовий unit — файл із параметрами служби. Перегляньте та встановіть його:
+
+```bash
+cat deploy/printflow.service
+sudo install -m 0644 deploy/printflow.service /etc/systemd/system/printflow.service
+```
+
+Його вміст має бути таким:
+
+```ini
+[Unit]
+Description=PrintFlow LAN document application
+After=network.target
+
+[Service]
+Type=simple
+User=printflow
+Group=printflow
+WorkingDirectory=/opt/printflow/current/server
+Environment=NODE_ENV=production
+Environment=HOST=0.0.0.0
+Environment=PORT=4000
+Environment=DATA_DIR=/var/lib/printflow/data
+Environment=UPLOAD_DIR=/var/lib/printflow/uploads
+EnvironmentFile=/etc/printflow.env
+ExecStart=/usr/bin/node /opt/printflow/current/server/dist/index.js
+Restart=on-failure
+RestartSec=3
+TimeoutStopSec=15
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/printflow
+
+[Install]
+WantedBy=multi-user.target
+```
+
+Активна версія зберігатиметься за посиланням `current`. Його створить `deploy.sh`: скрипт отримує зміни, збирає окрему версію та перезапускає службу. Якщо перевірка після запуску не вдалася, він повертає попередню версію, коли вона є. Для першого запуску потрібна чиста копія Git; локальний `.env` і тестові дані ігноруються Git і не потраплять до версії.
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable printflow.service
+bash /opt/printflow/repo/deploy.sh
+sudo systemctl start printflow.service
+systemctl status printflow.service --no-pager
+curl -fsS http://127.0.0.1:4000/api/health
+```
+
+Скрипт може запитати пароль `sudo` для перезапуску служби. Очікується `active (running)`, відповідь `ready` і повідомлення `Healthy release: ...`. Додаткові права `sudo` без пароля не потрібні.
+
+Основні команди керування:
+
+```bash
+sudo systemctl restart printflow.service
+systemctl is-enabled printflow.service
+systemctl is-active printflow.service
+journalctl -u printflow.service -n 80 --no-pager
+journalctl -u printflow.service -f
+```
+
+Якщо ваш користувач не бачить журнал, додайте `sudo` перед `journalctl`. З перегляду потоку виходять Ctrl+C. Після зміни `.env` потрібен restart; після зміни unit — спочатку `sudo systemctl daemon-reload`, потім restart.
+
+`enable` вмикає автоматичний запуск після перезавантаження Ubuntu. Він не запускає саму VM: її потрібно увімкнути окремо. Для ручної перевірки автозапуску збережіть роботу, виконайте `sudo reboot`, увійдіть знову та перевірте `systemctl is-active printflow.service`.
+
+*Початкове встановлення служби, запуск deploy та повне перезавантаження в цьому сеансі не виконувалися. Існуюча служба перевірена без зміни її налаштувань.*
+
+## КРОК 9. Налаштування CUPS
+
+Цей крок готує службу друку. Для відкриття сайту він необов'язковий.
+
+```bash
+sudo apt install -y cups cups-client
+sudo systemctl enable --now cups.service
+systemctl is-active cups.service
+lpstat -r
+lpstat -p -d
+sudo lpinfo -v
+```
+
+Без принтера повідомлення про відсутність принтерів або типової черги є очікуваним. Вебсайт при цьому має працювати.
+
+Для USB-принтера підключіть кабель і перевірте:
+
+```bash
+lsusb
+sudo lpinfo -v
+```
+
+У VM передайте USB-пристрій саме Ubuntu через меню USB/Devices програми віртуалізації. Якщо принтер залишився підключеним до macOS або Windows, Ubuntu його не побачить. Увімкніть принтер і перевірте кабель.
+
+Налаштування черги залежить від моделі. Знайдіть точний URI пристрою у `lpinfo -v` та підтримуваний драйвер:
+
+```bash
+lpinfo -m
+```
+
+Якщо для вашої моделі є потрібний драйвер, створіть чергу. Наступні команди інтерактивно запитають фактичні значення з виводу попередніх команд — вони не визначають їх автоматично:
+
+```bash
+read -r -p 'Назва черги латиницею без пробілів: ' PRINTFLOW_QUEUE
+read -r -p 'URI пристрою з lpinfo -v: ' PRINTFLOW_PRINTER_URI
+read -r -p 'Ідентифікатор драйвера з першого стовпця lpinfo -m: ' PRINTFLOW_DRIVER
+sudo lpadmin -p "$PRINTFLOW_QUEUE" -E -v "$PRINTFLOW_PRINTER_URI" -m "$PRINTFLOW_DRIVER"
+sudo lpadmin -d "$PRINTFLOW_QUEUE"
+lpstat -p -d
+```
+
+`-m everywhere` підходить для сумісних IPP-принтерів; для довільного USB-принтера його не підставляйте. Якщо потрібного драйвера немає, спочатку перевірте підтримку конкретної моделі в Ubuntu та інструкцію виробника. Без моделі принтера правильну команду встановлення драйвера визначити не можна. [Команди адміністрування CUPS](https://openprinting.github.io/cups/doc/admin.html).
+
+Тільки коли черга налаштована й ви готові до справжнього друку, можна окремо перевірити CUPS тестовим PDF:
+
+```bash
+read -r -p 'Повний шлях до вашого тестового PDF: ' PRINTFLOW_TEST_PDF
+lp -d "$PRINTFLOW_QUEUE" "$PRINTFLOW_TEST_PDF"
+lpstat -W not-completed -o
+```
+
+Ця команда друкує безпосередньо через CUPS, поза вебсайтом. Не відкривайте порт 631 чи віддалене адміністрування CUPS для запуску PrintFlow.
+
+У коді вже є приймання PDF, журнал, стан `awaiting_setup` та функція `finishPrintJob` для майбутньої фіксації кінцевого результату й видалення PDF. **Немає** передавання PDF до CUPS, прив'язки ідентифікатора завдання CUPS до документа та опитування станів принтера. Сама установка CUPS цього не додає. `/api/health` поки завжди повертає `printingEnabled: false`.
+
+*Підключення USB, створення черги, драйвер та фізичний друк у цьому сеансі не перевірені.*
+
+## КРОК 10. Оновлення проєкту з GitHub
+
+Зміни спочатку мають бути опубліковані власником репозиторію. На Ubuntu перевірте локальні зміни:
+
+```bash
+cd /opt/printflow/repo
+git status --short
+git pull --ff-only
 bash /opt/printflow/repo/deploy.sh
 ```
 
-## 7. Керування службою та діагностика
+`git pull --ff-only` отримує нову версію без автоматичного злиття. Якщо є конфлікт або власні зміни, зупиніться й збережіть їх; не використовуйте `git reset --hard` або `git clean` для стирання проблеми.
+
+`deploy.sh` теж виконує `git pull --ff-only`, тому під час звичайного оновлення достатньо самого скрипту. Він встановлює клієнтські й серверні залежності через `npm ci`, виконує збірку, залишає лише робочі серверні залежності в release та перезапускає службу. Вручну повторювати ці дії після нього не потрібно.
+
+Перевірте результат:
+
+```bash
+systemctl status printflow.service --no-pager
+readlink /opt/printflow/current
+curl -fsS http://127.0.0.1:4000/api/health
+```
+
+Документи й журнал залишаються у `/var/lib/printflow`, конфігурація — у `/etc/printflow.env`. Старі версії в `releases` автоматично не видаляються. Перед їх ручним прибиранням переконайтеся, що залишили поточну й попередню справну версії.
+
+## КРОК 11. Перевірка роботи
+
+Перевірте службу, HTTP і CUPS:
 
 ```bash
 systemctl is-active printflow.service
 systemctl is-enabled printflow.service
-systemctl show printflow.service -p User -p MainPID -p ExecStart
-journalctl -u printflow.service -n 100 --no-pager
-journalctl -u printflow.service -f
-sudo systemctl stop printflow.service
-sudo systemctl restart printflow.service
-```
-
-Вихід із `journalctl -f`: Ctrl+C. Закриття SSH не зупиняє системну службу. Після зміни unit потрібен `sudo systemctl daemon-reload`, а потім restart. Після зміни тільки `.env` достатньо restart.
-
-| Симптом | Що перевірити |
-|---|---|
-| `Permission denied (publickey)` | Ім’я `artem`, ключ `-i`, authorized_keys і права |
-| `Connection refused` на 22 | VM працює, правильна IP, `systemctl status ssh` |
-| 4000 недоступний | `systemctl status printflow`, `ss`, UFW і режим Parallels |
-| HTML відкривається, API не працює | `/api/health`, відповідність активної збірки, журнали |
-| `/admin` повертає 503 при вході | Наявність ADMIN_PASSWORD_HASH у `/etc/printflow.env`, restart |
-| Deploy не має доступу GitHub | read-only deploy key, `printflow_config`, перевірка known_hosts |
-| Deploy відхиляє локальні зміни | `git -C /opt/printflow/repo diff`; зберегти зміни, не стирати дані |
-| Upload повертає 500 | Місце на диску та права `/var/lib/printflow`; журнали служби |
-| Втрата сесії після restart | Очікувана поведінка: увійти повторно |
-
-## 8. PDF і журнали
-
-Завантажені документи та журнал не зберігаються у Git. Після кінцевого статусу друку (`completed`, `error`, `cancelled`) PDF видаляється, а запис журналу залишається. Невдалі видалення повторюються щохвилини та після перезапуску сервера. Фізичний друк ще не підключений: майбутній обробник має викликати `finishPrintJob` після підтвердження кінцевого стану. PDF у статусі `awaiting_setup` та інші документи в очікуванні зберігаються. Адміністративна кнопка очищення журналу не видаляє ці PDF. Перед демонстрацією контролюйте `df -h` і розмір `/var/lib/printflow` через sudo. Не очищайте каталог PDF без перегляду та резервної копії. Автоматичне очищення записів за типовим налаштуванням вимкнене.
-
-Для резервної копії слід узгоджено зупинити службу, скопіювати `/var/lib/printflow` і `/etc/printflow.env` у приватне захищене місце, запустити службу та перевірити health. Секрети й PDF не включаються у публічні архіви. Відновлення копії потрібно окремо перевіряти; сама наявність архіву не доводить його придатність.
-
-## 9. CUPS
-
-```bash
+curl -fsS http://127.0.0.1:4000/api/health
+curl -I http://127.0.0.1:4000/
+curl -I http://127.0.0.1:4000/admin
 systemctl is-active cups.service
-systemctl is-enabled cups.service
+lpstat -r
 lpstat -p -d
 ```
 
-На цьому етапі встановлюється лише базова служба. Принтер, драйвер, черга й передавання завдань із вебзастосунку не налаштовані. Повідомлення `no printers` є очікуваним. Не вмикайте віддалене адміністрування CUPS і не відкривайте 631 у мережу для цього передзахисту.
+Далі в браузері іншого пристрою:
 
-## 10. Порядок показу на передзахисті
+1. Відкрийте `http://IP_СЕРВЕРА:4000`; має бути «Сервер доступний».
+2. Виберіть власний тестовий PDF до 10 МБ та натисніть «Завантажити». Дозволено до 10 файлів за один запит.
+3. Переконайтеся, що з'явився запис «Очікує налаштування друку». Це приймання документа, фізичний друк ще не виконується.
+4. Перейдіть на `/admin`, введіть пароль, заданий для `/etc/printflow.env`. Має відкритися адмінпанель із завантаженим документом.
+5. Перевірте TXT-експорт. Перемикач очищення дозволяє обрати 7, 30 або 90 днів; автоматичне очищення зберігає записи незавершених документів. Типово воно вимкнене.
+6. Натисніть «Вийти»: доступ до історії має знову вимагати входу. Після перезапуску служби також потрібен повторний вхід.
 
-1. Показати структуру `client`/`server` і назвати технології.
-2. Показати запущену VM Ubuntu Linux у Parallels.
-3. Виконати `ip -br a` й пояснити адресу сервера.
-4. Показати `git -C /opt/printflow/repo log -1 --oneline` — код отримано з GitHub.
-5. Показати `systemctl status printflow.service --no-pager`.
-6. На Mac відкрити `http://10.211.55.10:4000` і `/admin`.
-7. Пояснити: сайт працює на Ubuntu, Mac є клієнтом; CUPS та фізичний принтер — наступний етап. Доступ із телефона оголошувати перевіреним лише після реального відкриття на ньому.
+«Очистити історію» видаляє весь журнал після підтвердження, але PDF в очікуванні залишаються на сервері. Перевіряйте це лише на тестових даних. Автоматичне очищення історії спрацьовує при запуску сервера, збереженні налаштувань і раз на добу. Воно не є політикою видалення PDF в очікуванні.
 
-Звіт: `report/Передзахист_дипломної.docx` і PDF. Фактичні перевірки: `report/TEST_RESULTS.md`. Реквізити титульної сторінки та вимоги кафедри треба уточнити.
+Місце на диску та розмір робочих даних:
+
+```bash
+df -h
+sudo du -sh /var/lib/printflow
+```
+
+Для резервної копії зупиніть службу, скопіюйте `/var/lib/printflow` та `/etc/printflow.env` у приватне захищене місце, потім знову запустіть службу. Ці файли містять документи й конфігурацію доступу; до Git їх не додають. Відновлення копії потрібно перевіряти окремо.
+
+Перевірки коду із кореня проєкту:
+
+```bash
+cd /opt/printflow/repo
+npm run typecheck
+npm run build
+npm test
+```
+
+Тести використовують тимчасові каталоги й не очищають робочі дані служби. Для них потрібні залежності з кроку 5.
+
+## КРОК 12. Найпоширеніші проблеми
+
+| Проблема | Що зробити |
+|---|---|
+| Сайт не відкривається навіть на Ubuntu | Виконайте `curl -fsS http://127.0.0.1:4000/api/health`, перевірте `systemctl status printflow.service --no-pager` і журнал. |
+| Служба не запускається | `sudo journalctl -u printflow.service -n 80 --no-pager`. Перевірте `/usr/bin/node`, `readlink /opt/printflow/current` та наявність `server/dist/index.js` у поточній версії. |
+| `EADDRINUSE` | Порт 4000 зайнятий; зупиніть ручний `npm start` через Ctrl+C перед запуском служби. Перевірте `ss -ltnp 'sport = :4000'`. |
+| На Ubuntu працює, з телефона — ні | Уточніть поточну IP, `HOST=0.0.0.0`, Bridged, спільну Wi-Fi-мережу та UFW. Вимкніть гостьову ізоляцію клієнтів або оберіть звичайну довірену мережу. |
+| IP змінилася | `hostname -I`; відкрийте нову адресу. За потреби зарезервуйте її для VM у DHCP роутера. |
+| Не встановлюються залежності | Перевірте інтернет, `node -v`, `npm -v`, `df -h`. Повторіть `npm ci` в потрібній папці. Не видаляйте lock-файли. Для несумісної версії поверніться до кроку 3. |
+| GitHub: `Permission denied (publickey)` | Перевірте ключ `~/.ssh/printflow_github`, Deploy key для потрібного репозиторію й `git config --get core.sshCommand`. |
+| `deploy.sh` повідомляє про локальні зміни | `git diff` і `git status --short`. Збережіть потрібні правки та узгодьте оновлення; скрипт спеціально відмовляється їх перезаписувати. |
+| Вхід адміністратора повертає 503 | Задайте пароль через `sudo python3 scripts/set-admin-password.py /etc/printflow.env`, потім `sudo systemctl restart printflow.service`. |
+| Невірний пароль або завершена сесія | Для служби пароль береться з `/etc/printflow.env`, для ручного запуску — із `server/.env`. Після restart увійдіть знову. Після 10 невдалих спроб зачекайте 15 хвилин. |
+| Завантаження відхилено | Потрібен PDF із сигнатурою `%PDF-`, до 10 МБ, до 10 файлів. DOCX спочатку експортуйте в PDF. |
+| Завантаження повертає 500 | Перевірте журнал, вільний диск і власника `/var/lib/printflow`; запис має бути доступний користувачу `printflow`. |
+| CUPS не бачить принтер | `lsusb`, `sudo lpinfo -v`, кабель, живлення, передавання USB у VM, підтримка моделі. |
+| PDF прийнято, але він не друкується | Це поточна поведінка: інтеграція вебсайту з CUPS ще не реалізована. Установлення драйвера саме по собі не змінює її. |
+
+Після кожного виправлення перевірте `/api/health` та сторінку з іншого пристрою. Результатів, яких не перевіряли на вашому обладнанні, не оголошуйте підтвердженими.

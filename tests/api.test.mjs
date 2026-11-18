@@ -4,7 +4,7 @@ import { spawn } from 'node:child_process';
 import { mkdtemp, rm, readFile, readdir, writeFile, appendFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { createHash, randomUUID } from 'node:crypto';
+import { scryptSync, randomUUID } from 'node:crypto';
 import { once } from 'node:events';
 import net from 'node:net';
 
@@ -25,7 +25,7 @@ test('production API: isolated documents, authentication, restart and SPA', asyn
         HOST: '127.0.0.1',
         DATA_DIR: path.join(root, 'data'),
         UPLOAD_DIR: path.join(root, 'uploads'),
-        ADMIN_PASSWORD_HASH: createHash('sha256').update('isolated-test-password').digest('hex'),
+        ADMIN_PASSWORD_HASH: `scrypt:${'ab'.repeat(16)}:${scryptSync('isolated-test-password', 'ab'.repeat(16), 64).toString('hex')}`,
         SESSION_TTL_SECONDS: '1',
       },
       stdio: ['ignore', 'pipe', 'pipe'],
@@ -75,7 +75,12 @@ test('production API: isolated documents, authentication, restart and SPA', asyn
     const missing = await fetch(`${base}/api/missing`);
     assert.equal(missing.status, 404);
     assert.match(missing.headers.get('content-type'), /json/);
-    assert.equal((await fetch(`${base}/api/admin/history`)).status, 401);
+    for (const [route, method] of [
+      ['/history', 'GET'], ['/history', 'DELETE'], ['/history/download', 'GET'],
+      ['/settings', 'GET'], ['/settings', 'PUT'], ['/logout', 'POST'],
+    ]) {
+      assert.equal((await fetch(`${base}/api/admin${route}`, { method })).status, 401);
+    }
     assert.equal(
       (
         await fetch(`${base}/api/admin/login`, {
@@ -106,6 +111,15 @@ test('production API: isolated documents, authentication, restart and SPA', asyn
       await (await fetch(`${base}/api/admin/history/download`, { headers })).text(),
       /awaiting_setup/,
     );
+    const saveSettings = (settings) => fetch(`${base}/api/admin/settings`, {
+      method: 'PUT',
+      headers: { ...headers, 'Content-Type': 'application/json' },
+      body: JSON.stringify(settings),
+    });
+    assert.equal((await saveSettings({ autoCleanup: true, retentionDays: 1 })).status, 400);
+    assert.deepEqual(await (await saveSettings({ autoCleanup: true, retentionDays: 7 })).json(), {
+      autoCleanup: true, retentionDays: 7,
+    });
     assert.equal(
       (await fetch(`${base}/api/admin/logout`, { method: 'POST', headers })).status,
       204,
@@ -139,6 +153,13 @@ test('production API: isolated documents, authentication, restart and SPA', asyn
       (await (await fetch(`${base}/api/jobs?ids=${finishedId}`)).json())[0].status,
       'completed',
     );
+    const restartedHeaders = { Authorization: `Bearer ${await login()}` };
+    assert.deepEqual(await (await fetch(`${base}/api/admin/settings`, { headers: restartedHeaders })).json(), {
+      autoCleanup: true, retentionDays: 7,
+    });
+    assert.equal((await fetch(`${base}/api/admin/history`, { method: 'DELETE', headers: restartedHeaders })).status, 204);
+    assert.deepEqual(await (await fetch(`${base}/api/admin/history`, { headers: restartedHeaders })).json(), []);
+    assert.deepEqual(await readdir(path.join(root, 'uploads')), [`${jobs[0].id}.pdf`]);
   } finally {
     await stop();
     await rm(root, { recursive: true, force: true });

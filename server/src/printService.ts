@@ -40,8 +40,8 @@ export function registerDocuments(files: Express.Multer.File[]): HistoryRecord[]
     files.forEach((file, index) => {
       const target = path.join(uploadDir, `${records[index].id}.pdf`);
       fs.renameSync(file.path, target);
-      fs.chmodSync(target, 0o600);
       moved.push(target);
+      fs.chmodSync(target, 0o600);
     });
     addHistory(records);
     return records;
